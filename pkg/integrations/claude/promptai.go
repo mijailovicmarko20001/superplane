@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -15,9 +16,7 @@ const PromptAIPayloadType = "claude.promptAI"
 type PromptAI struct{}
 
 type PromptAISpec struct {
-	Model        string `json:"model"`
-	Prompt       string `json:"prompt"`
-	AlertDetails string `json:"alertDetails"`
+	Model string `json:"model"`
 }
 
 type PromptAIPayload struct {
@@ -33,11 +32,11 @@ func (c *PromptAI) Label() string {
 }
 
 func (c *PromptAI) Description() string {
-	return "Send a prompt and optional alert details to Claude and receive a concise response"
+	return "Automatically analyzes upstream alert data from Grafana using Claude"
 }
 
 func (c *PromptAI) Documentation() string {
-	return "Combines a static instruction prompt with dynamic alert data and sends it to Claude."
+	return "Reads the upstream Grafana alert payload from ctx.Data and sends it to Claude for analysis."
 }
 
 func (c *PromptAI) Icon() string {
@@ -73,22 +72,6 @@ func (c *PromptAI) Configuration() []configuration.Field {
 				},
 			},
 		},
-		{
-			Name:        "prompt",
-			Label:       "Prompt",
-			Type:        configuration.FieldTypeText,
-			Required:    true,
-			Placeholder: "e.g. Analyze this alert and suggest remediation steps",
-			Description: "The instruction for Claude",
-		},
-		{
-			Name:        "alertDetails",
-			Label:       "Alert Details",
-			Type:        configuration.FieldTypeText,
-			Required:    false,
-			Placeholder: "Dynamic alert data from upstream nodes",
-			Description: "Optional context (e.g. Grafana alert payload) appended to the prompt",
-		},
 	}
 }
 
@@ -100,9 +83,6 @@ func (c *PromptAI) Setup(ctx core.SetupContext) error {
 	if spec.Model == "" {
 		return fmt.Errorf("model is required")
 	}
-	if spec.Prompt == "" {
-		return fmt.Errorf("prompt is required")
-	}
 	return nil
 }
 
@@ -111,17 +91,18 @@ func (c *PromptAI) Execute(ctx core.ExecutionContext) error {
 	if err := mapstructure.Decode(ctx.Configuration, &spec); err != nil {
 		return fmt.Errorf("failed to decode configuration: %v", err)
 	}
-
 	if spec.Model == "" {
 		return fmt.Errorf("model is required")
 	}
-	if spec.Prompt == "" {
-		return fmt.Errorf("prompt is required")
-	}
 
-	combined := spec.Prompt
-	if spec.AlertDetails != "" {
-		combined = fmt.Sprintf("%s\n\nContext:\n%s\n\nOdgovori koncizno.", spec.Prompt, spec.AlertDetails)
+	const systemPrompt = "You are an SRE assistant. Analyze the following alert data and provide a concise summary of what went wrong, the likely cause, and suggested remediation steps."
+
+	combined := systemPrompt
+	if ctx.Data != nil {
+		alertJSON, err := json.Marshal(ctx.Data)
+		if err == nil {
+			combined = fmt.Sprintf("%s\n\nGrafana Alert Payload:\n%s", systemPrompt, string(alertJSON))
+		}
 	}
 
 	client, err := NewClient(ctx.HTTP, ctx.Integration)
